@@ -1,0 +1,7 @@
+*.pt
+**/*.pt
+**/*.xml
+**/*.npy
+data/*
+out/*
+.DS_Store
