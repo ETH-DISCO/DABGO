@@ -1,10 +1,21 @@
-# Data Attribution via Bidirectional Gradient Optimization
+<div align="center">
 
-This repository contains experiments for studying attribution in language models via bidirectional gradient optimization on two main datasets: Wikipedia facts and Project Gutenberg books. It is the code for the Data Attribution in Large Language Models via Bidirectional Gradient Optimization work ([Paper](https://tik-db.ee.ethz.ch/file/3811d93c1807bd4f700bbd00697a8cd8/))
+# **DABGO: Data Attribution via Bidirectional Gradient Optimization**  
+
+**Frédéric Berdoz · Luca A. Lanzendörfer · Kaan Bayraktar · Roger Wattenhofer**
+
+<!--[![arXiv](https://img.shields.io/badge/arXiv-2511.09844-b31b1b.svg)](https://arxiv.org/abs/2511.09844)-->
+[Paper](https://tik-db.ee.ethz.ch/file/3811d93c1807bd4f700bbd00697a8cd8/)
+
+Accepted at AIGOV @ AAAI 2026
+
+</div>
+
+
 
 ## Overview
 
-The repository is organized into two main experiment folders:
+This repository contains experiments for studying attribution in language models via bidirectional gradient optimization on two main datasets: Wikipedia facts and Project Gutenberg books. It is organized into two main experiment folders:
 - **`wikipedia/`**: Experiments on Wikipedia factual knowledge
 - **`gutenberg/`**: Experiments on literary text from Project Gutenberg
 
