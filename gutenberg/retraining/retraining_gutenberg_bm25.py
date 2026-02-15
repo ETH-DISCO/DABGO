@@ -1,3 +1,10 @@
+### Datasets
+### Attributed Samples in dictionary
+### Retraining script like in attribution.py
+### DataLoader and perplexity computation
+
+
+
 import torch
 import numpy as np
 import torch.nn as nn
@@ -16,17 +23,22 @@ import random
 import wandb
 import math as m
 from collections import deque
-import math
+from rank_bm25 import BM25Okapi
 
+
+
+## Dataset Functions and loss collection functions
 class GutenbergDatasetAuthorText(Dataset):
     def __init__(self, training_data,tokenizer ):
         self.tokenizer = tokenizer
         self.pad_token_id = tokenizer.pad_token_id
+        # Generate the (N, B) matrix
         self.data = np.array(training_data)
     def __len__(self):
         return self.data.shape[0]
 
     def __getitem__(self, idx):
+        # Return as torch tensors
         input_ids = torch.tensor(self.data[idx], dtype=torch.long)
         target_ids = torch.tensor(self.data[idx], dtype=torch.long)
         attention_mask = (input_ids != self.pad_token_id).long()
@@ -73,10 +85,11 @@ class EvalLoggingSimple(TrainerCallback):
         wandb.log({
             "Masked Loss": loss,
             "NLL": -log_likelihood,
-            'Probability': math.exp(log_likelihood),
+            'Probability': m.exp(log_likelihood),
         })
 
         return control
+
 
 
 
@@ -105,6 +118,10 @@ if __name__ == "__main__":
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     data_base_path = os.path.join(os.path.dirname(__file__))
     data_path = os.path.join(data_base_path, args.data_path)
+    
+
+    base_dir = os.path.join(os.path.dirname(__file__), "../")
+    
 
     with open(data_path, 'r') as f:
         data = json.load(f)
@@ -132,28 +149,34 @@ if __name__ == "__main__":
     print(args.authors)
     for author in args.authors:
         print(f'author: {author}')
-        ckpt = torch.load(os.path.join(os.path.dirname(__file__), f'../out/gutenberg/gutenberg_experiments/finetuned_models/{author}.pt'))
-        output_ids = ckpt['output_ids']
-        prompt_length = ckpt['prompt_length']
-        print(tokenizer.decode(output_ids[0], skip_special_tokens=True))
-
-        losses_ft = np.load(os.path.join(os.path.dirname(__file__), f'../data/losses/gutenberg/experiments_finetuned/losses_ft_{author}.npy'))
-        losses_unlearned = np.load(os.path.join(os.path.dirname(__file__), f'../data/losses/gutenberg/experiments_unlearned/losses_unlearned_{author}.npy'))
-        print(output_ids)
-        print(type(output_ids))
-        print(output_ids.shape)
-        losses_diff = np.abs(losses_ft - losses_unlearned)
-        sorted_indices = np.argsort(losses_diff)[::-1]
-        print(np.array(train_data_authors)[sorted_indices[:1]])
+        sample_sentence = torch.load(os.path.join(base_dir, "data/samples_gutenberg", f"{sample}.pt"), map_location='cpu', weights_only=False)
+        sentence = sample_sentence['sentence']
+        prompt = sample_sentence['prompt']
+        full_sentence = prompt + sentence
+        output_ids = tokenizer.encode(full_sentence, add_special_tokens=False, return_tensors='pt')
+        if output_ids.shape[1] > model.config.n_positions:
+            output_ids = output_ids[:, :model.config.n_positions]
+            print(f"Output ids shape: {output_ids.shape}")
+            
+        prompt_length = len(tokenizer.encode(prompt, add_special_tokens=False))
+        
         print('Output ids:')
         print(tokenizer.decode(output_ids[0], skip_special_tokens=True))
+        sample_scores = np.load(os.path.join(os.path.dirname(__file__), "bm25", "sample_scores", f"{sample}.npy"))
+        sample_scores = sample_scores.argsort()[::-1]
+        sample_scores = sample_scores[:args.num_samples]
+        samples_indices = sample_scores
+        
         num_samples = args.num_samples
-        train_data_np = np.array(train_data)
-        train_data_new = np.delete(train_data_np, sorted_indices[:num_samples], axis=0)
-        train_data_authors_new = np.delete(train_data_authors, sorted_indices[:num_samples], axis=0)
-        training_dataset = GutenbergDatasetAuthorText(train_data_np, tokenizer)
-        eval_dataset = GutenbergDatasetAuthorText(eval_data, tokenizer)
+        
 
+        train_data_np = np.array(train_data)
+        train_data_new = np.delete(train_data_np, np.array(samples_indices), axis=0)
+        train_data_authors_new = np.delete(train_data_authors, np.array(samples_indices), axis=0)
+        ## Train model on new training data 
+        training_dataset = GutenbergDatasetAuthorText(train_data_new, tokenizer)
+        eval_dataset = GutenbergDatasetAuthorText(eval_data, tokenizer)
+        
         for seed in seeds:
             random.seed(seed)
             np.random.seed(seed)
@@ -161,7 +184,7 @@ if __name__ == "__main__":
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(seed)
             print(f'seed: {seed}')
-            os.makedirs(os.path.join(model_base_path, f'retrained_models/{author}/attributed_samples_{num_samples}_seed_{seed}_final'), exist_ok=True)
+            os.makedirs(os.path.join(model_base_path, f'retrained_models/{author}/bm25_samples_{num_samples}_seed_{seed}_final'), exist_ok=True)
             
             print('scratch training')
             config = GPT2Config(
@@ -185,22 +208,22 @@ if __name__ == "__main__":
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.95)
             print(model.config)
             training_args = TrainingArguments(
-                output_dir=os.path.join(model_base_path, f'retrained_models/{author}/attributed_samples_{num_samples}_seed_{seed}'),
+                output_dir=os.path.join(model_base_path, f'retrained_models/{author}/bm25_samples_{num_samples}_seed_{seed}'),
                 per_device_train_batch_size=batch_size,
                 per_device_eval_batch_size=batch_size,
                 gradient_accumulation_steps=gradient_accumulation_steps,
                 num_train_epochs=num_epochs,
                 save_strategy="epoch",
-                save_total_limit=2,
                 learning_rate=1e-4,
                 warmup_steps=100,
                 weight_decay=0.01,
+                save_total_limit=2,
                 logging_dir='./logs',
                 eval_strategy="epoch",
                 report_to="wandb",
+                max_grad_norm=1.0,
                 load_best_model_at_end=True,
                 metric_for_best_model="loss",
-                max_grad_norm=1.0,
                 seed=seed
             )
             print('training...')
@@ -215,18 +238,17 @@ if __name__ == "__main__":
             # inside loop
             wandb.init(
                 project=args.project_name,
-                name=f"attributed-samples_seed-{seed}_num_samples-{num_samples}",
-                config={"mode": "attributed", "seed": seed, "num_samples": num_samples, "author": author},
+                name=f"bm25-samples_seed-{seed}_num_samples-{num_samples}",
+                config={"mode": "bm25", "seed": seed, "num_samples": num_samples, "author": author},
                 reinit=True 
             )
             wandb.watch(model, log=None)
-
             trainer.train()
             model.eval()
             model.to('cuda')
             model.to('cpu')
-            os.makedirs(os.path.join(model_base_path, f'retrained_models/{author}/attributed_samples_{num_samples}_seed_{seed}_final'), exist_ok=True)
-            trainer.save_model(f'out/retrained_models/{author}/attributed_samples_{num_samples}_seed_{seed}_final')
+            os.makedirs(os.path.join(model_base_path, f'retrained_models/{author}/bm25_samples_{num_samples}_seed_{seed}_final'), exist_ok=True)
+            trainer.save_model(f'out/retrained_models/{author}/bm25_samples_{num_samples}_seed_{seed}_final')
             trainer.save_state()
             del model
             torch.cuda.empty_cache()

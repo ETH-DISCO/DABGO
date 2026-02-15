@@ -1,7 +1,9 @@
 *.pt
+*.npy
 **/*.pt
 **/*.xml
 **/*.npy
 data/*
 out/*
 .DS_Store
+__pycache__/

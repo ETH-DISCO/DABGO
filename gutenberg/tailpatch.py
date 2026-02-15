@@ -61,13 +61,11 @@ def tailpatch(samples,output_ids, prompt_length, model,lr=1e-5):
     model.train()
     optimizer.zero_grad()
     for batch in dataloader:
-        
         input_ids = batch['input_ids'].to(device)
-        
         attention_mask = batch['attention_mask'].to(device)
         labels = batch['labels'].to(device)
         outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-        loss = outputs.loss
+        loss = outputs.loss 
         loss.backward()
         del outputs, input_ids, attention_mask
         gc.collect()
@@ -88,41 +86,33 @@ def tailpatch(samples,output_ids, prompt_length, model,lr=1e-5):
     token_probs = log_probs.gather(2, target_ids.unsqueeze(-1))
     token_probs = token_probs.squeeze(-1)
     log_probability_sum = torch.sum(token_probs)
-    
+    del optimizer
+    model.zero_grad(set_to_none=True)
+    torch.cuda.empty_cache()
+    gc.collect()
     p = math.exp(log_probability_sum.item())
-
     original = math.exp(original_log_probability_sum.item())
-    print("output_ids shape:", output_ids.shape)
-    print("prompt_length:", prompt_length)
-    print("logits slice shape:", logits[:, prompt_length-1:-1, :].shape)
-    print("target_ids shape:", target_ids.shape)
-    print("token_probs shape:", token_probs.shape)
-    print("token_probs min/max:", token_probs.min().item(), token_probs.max().item())
-    print("log_probability_sum:", log_probability_sum.item())
-    print("any nan in token_probs:", torch.isnan(token_probs).any().item())
-
     return p, original
 
 
 
 
-
-
-def main(num_samples, lr, method, save_dir, raw_probabilities=False, ascent_steps=10, descent_steps=3, sample_names=None):
+def main(num_samples, lr, save_dir, method):
     base_dir = os.path.join(os.path.dirname(__file__), "../")
     print(base_dir)
-    
-    train_data = load_from_disk(os.path.join(base_dir, "data/training_data/tokenized_wit_dataset/train"))
-    print(len(train_data))
-    print(train_data[0])
-    
-    
+    with open(os.path.join(os.path.dirname(__file__), "selected_dataset_mixed.json"), "r") as f:
+        data = json.load(f)
+    print(data.keys())
+    train_data = data['train_data_np']
+    train_data_authors = data['train_data_authors']
+
+    train_data = torch.tensor(train_data)
     print(train_data.shape)
-    samples = os.listdir(os.path.join(base_dir, "data", "samples_wikipedia"))
-    samples = [name.replace('.pt', '') for name in samples]
+    samples = os.listdir(os.path.join(os.path.dirname(__file__), "gecko/sample_scores"))
+    samples = [name.replace('.npy', '') for name in samples]
     print(len(samples))
     print(samples)
-    model = GPT2LMHeadModel.from_pretrained(os.path.join(base_dir, "out/wiki_model"))
+    model = GPT2LMHeadModel.from_pretrained(os.path.join(base_dir, "out/gpt2-scratch-mixed"))
     base_model_dict = deepcopy(model.state_dict())
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -132,19 +122,16 @@ def main(num_samples, lr, method, save_dir, raw_probabilities=False, ascent_step
     print(model.config)
     results = []
     average_score = 0
-    if sample_names is not None:
-        samples = sample_names
-        print(f"Using samples: {samples}")
-    for sample in samples:
+    for s, sample in enumerate(samples):
         model.load_state_dict(base_model_dict)
         sample_scores = [i for i in range(num_samples)]
-        if method == "dabgo":
-            ascent_losses = np.load(os.path.join(base_dir, f"data/losses/wikipedia/{sample}/ascent/losses_{sample}_ascent.npy"))
-            descent_losses = np.load(os.path.join(base_dir, f"data/losses/wikipedia/{sample}/descent/losses_{sample}_descent.npy"))
-            sample_scores = np.abs(ascent_losses - descent_losses)
+        print(f"Sample: {sample}")
+        
+        if method == "gecko":
+            sample_scores = np.load(os.path.join(os.path.dirname(__file__), "gecko/sample_scores", f"{sample}.npy"))
+            sample_scores = np.array(sample_scores)
             sample_scores = sample_scores.argsort()[::-1]
             sample_scores = sample_scores[:num_samples]
-            
         if method == "random":
             sample_scores = random.sample(range(len(train_data)), num_samples)
             print(sample_scores[:num_samples])
@@ -153,90 +140,73 @@ def main(num_samples, lr, method, save_dir, raw_probabilities=False, ascent_step
             sample_scores = sample_scores.argsort()[::-1]
             sample_scores = sample_scores[:num_samples]
         if method == "trackstar":
-            trackstar_influence = np.load(os.path.join(base_dir, f"data/trackstar/wikipedia/influence_lists/{sample}.npy"))
+            trackstar_influence = np.load(os.path.join(base_dir, f"data/trackstar/gutenberg/sample_scores/influence_list_{sample}.npy"))
             sample_scores = trackstar_influence[:len(train_data)]
             sample_scores = sample_scores.argsort()[::-1]
             sample_scores = sample_scores[:num_samples]
-
-        if method == "gecko":
-            sample_scores = np.load(os.path.join(os.path.dirname(__file__), "gecko/sample_scores", f"{sample}.npy"))
+        if method == "dabgo":
+            ascent_losses = np.load(os.path.join(os.path.dirname(__file__), "../data/losses/gutenberg", f"{sample}", "ascent", f"losses_{sample}_ascent.npy"))
+            descent_losses = np.load(os.path.join(os.path.dirname(__file__), "../data/losses/gutenberg", f"{sample}", "descent", f"losses_{sample}_descent.npy"))
+            sample_scores = np.abs(ascent_losses - descent_losses)
             sample_scores = sample_scores.argsort()[::-1]
             sample_scores = sample_scores[:num_samples]
-            
-        if method == "ascent":
-            ascent_losses = np.load(os.path.join(base_dir, f"data/losses/wikipedia/{sample}/ascent/losses_{sample}_ascent.npy"))
-            base_losses = np.load(os.path.join(base_dir, f"data/losses/wikipedia/losses_bf.npy"))
-            sample_scores = base_losses - ascent_losses
-            sample_scores = np.argsort(sample_scores)
-        if method == "descent":
-            descent_losses = np.load(os.path.join(base_dir, f"data/losses/wikipedia/{sample}/descent/losses_{sample}_descent.npy"))
-            base_losses = np.load(os.path.join(base_dir, f"data/losses/wikipedia/losses_bf.npy"))
-            sample_scores = descent_losses - base_losses
-            sample_scores = np.argsort(sample_scores)
-            
-        sample_sentence = torch.load(os.path.join(base_dir, "data/samples_wikipedia", f"{sample}.pt"), map_location='cpu', weights_only=False)
-        full_sentence = sample_sentence['sentence']
+        sample_sentence = torch.load(os.path.join(base_dir, "data/samples_gutenberg", f"{sample}.pt"), map_location='cpu', weights_only=False)
+        sentence = sample_sentence['sentence']
         prompt = sample_sentence['prompt']
+        full_sentence = prompt + sentence
         
-        print("full_sentence:", full_sentence)
-        print("prompt:", prompt)
         output_ids = tokenizer.encode(full_sentence, add_special_tokens=False, return_tensors='pt')
-        print("output_ids shape:", output_ids.shape)
-        
+        if output_ids.shape[1] > model.config.n_positions:
+            output_ids = output_ids[:, :model.config.n_positions]
+            print(f"Output ids shape: {output_ids.shape}")
+            
         prompt_length = len(tokenizer.encode(prompt, add_special_tokens=False))
         attributed_samples = []
         for i in range(num_samples):
-            print(f"sample {i}: {tokenizer.decode(train_data[int(sample_scores[i])]['input_ids'])}")
+            print(train_data_authors[sample_scores[i]])
             attributed_samples.append({
-                'input_ids': torch.tensor(train_data[int(sample_scores[i])]['input_ids']),
-                'attention_mask': torch.ones_like(torch.tensor(train_data[int(sample_scores[i])]['input_ids'])),
-                'labels': torch.tensor(train_data[int(sample_scores[i])]['input_ids'])
+                'input_ids': train_data[sample_scores[i]],
+                'attention_mask': torch.ones_like(train_data[sample_scores[i]]),
+                'labels': train_data[sample_scores[i]]
             })
         
         probability, original_probability = tailpatch(attributed_samples, output_ids, prompt_length, model, lr)
-        print(f"probability: {probability}")
-        print(f"original_probability: {original_probability}")
+        print(f"p: {probability}")
+        print(f"original: {original_probability}")
         print(f"absolute probability difference: {np.abs(probability - original_probability)}")
         print(f"\n\npercentage difference: {np.abs(probability - original_probability) / original_probability * 100}%\n\n")
         average_score += (np.abs(probability - original_probability) / original_probability* 100)
         results.append({
             'num_samples': num_samples,
             'title': sample,
-            'source': 'wikipedia',
             'method': method,
+            'source': 'gutenberg',
             'lr': lr,
             'steps': 10,
             'updated_probability': probability,
             'original_probability': original_probability,
             'absolute_probability_difference': np.abs(probability - original_probability),
-            'text_tokens': len(output_ids[0]),
+            'text_tokens': 128,
             'prompt_length': prompt_length,
             'full_sentence': full_sentence,
-            'prompt': prompt,
-            'ascent_steps': ascent_steps if ascent_steps is not None else None,
-            'descent_steps': descent_steps if descent_steps is not None else None,
+            'prompt': prompt
         })
     df = pd.DataFrame(results)
-    print("\n\n")
-    print(f"Average score: {average_score / len(samples)}")
-    print("\n\n")
-    os.makedirs(os.path.join(base_dir, "data", "results_dir",save_dir), exist_ok=True)
-    os.makedirs(os.path.join(base_dir, "data", "results_dir", f"{save_dir}",f"{method}",'wikipedia', f'{num_samples}'), exist_ok=True)
-    df.to_csv(os.path.join(base_dir, "data", "results_dir", f"{save_dir}",f"{method}",'wikipedia', f'{num_samples}', f'results.csv'), index=False)
-    print(f"Results saved to {os.path.join(base_dir, "data", "results_dir", f"{save_dir}",f"{method}",'wikipedia', f'{num_samples}', f'results.csv')}")
+    print(f"\n\nAverage score: {average_score / len(samples)}\n\n")
+    os.makedirs(os.path.join(base_dir, "data/results_dir", save_dir), exist_ok=True)
+    os.makedirs(os.path.join(base_dir, "data/results_dir", f"{save_dir}",f"{method}", 'gutenberg', f'{num_samples}'), exist_ok=True)
+    df.to_csv(os.path.join(base_dir, "data/results_dir", f"{save_dir}",f"{method}", 'gutenberg', f'{num_samples}', f'results.csv'), index=False)
+    print(f"Results saved to {os.path.join(base_dir, "data/results_dir", f"{save_dir}",f"{method}", 'gutenberg', f'{num_samples}', f'results.csv')}")
     
     
+
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_samples", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-5)
-    parser.add_argument("--save_dir", type=str, default='results_test')
+    parser.add_argument("--save_dir", type=str, default='results')
     parser.add_argument("--method", type=str, default='random')
-    parser.add_argument("--raw_probabilities", default=False, action='store_true')
-    parser.add_argument("--sample_names", type=str, nargs='+', default=None)
-    parser.add_argument("--ascent_steps", type=int, default=10)
-    parser.add_argument("--descent_steps", type=int, default=10)
     args = parser.parse_args()
-    main(args.num_samples, args.lr, args.method, args.save_dir, args.raw_probabilities, args.ascent_steps, args.descent_steps, args.sample_names)
+    main(args.num_samples, args.lr, args.save_dir, args.method)
     

@@ -79,21 +79,6 @@ class EvalLoggingSimple(TrainerCallback):
         return control
 
 
-# Define label priority
-label_priority = {
-    "Highly Relevant": 2,
-    "Somewhat Relevant": 1,
-    "Not Relevant": 0,
-}
-
-def sort_key(item):
-    idx, sim, nll, label, prob = item
-    
-    nll = float(nll)
-    prob = float(prob)
-    priority = label_priority.get(label, -1)
-    score = (1.0 / nll if nll > 0 else float("inf")) + (1.0 / prob if prob > 0 else float("inf"))
-    return (priority, score)
 
 def convert_to_python_types(obj):
     if isinstance(obj, dict):
@@ -118,7 +103,6 @@ if __name__ == "__main__":
     parser.add_argument("--project_name", type=str, default="Retraining Gutenberg FTUN")
     args = parser.parse_args()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    evaluation_path = os.path.join(os.path.dirname(__file__), '../data/datasets/evaluation_data')
     data_base_path = os.path.join(os.path.dirname(__file__))
     data_path = os.path.join(data_base_path, args.data_path)
 
@@ -131,7 +115,7 @@ if __name__ == "__main__":
     
     tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
     tokenizer.pad_token_id = tokenizer.eos_token_id
-
+    base_dir = os.path.join(os.path.dirname(__file__), "../")
     model_base_path = os.path.join(os.path.dirname(__file__), '../out')
     model_path = os.path.join(model_base_path, args.model_path)
     model = GPT2LMHeadModel.from_pretrained(model_path)
@@ -148,32 +132,32 @@ if __name__ == "__main__":
     print(args.authors)
     for author in args.authors:
         print(f'author: {author}')
-        ckpt = torch.load(os.path.join(os.path.dirname(__file__), f'../out/gutenberg/gutenberg_experiments/finetuned_models/{author}.pt'))
-        output_ids = ckpt['output_ids']
-        prompt_length = ckpt['prompt_length']
-        print(tokenizer.decode(output_ids[0], skip_special_tokens=True))
-
-        gecko_results = np.load(f'../data/gecko/gutenberg/{author}.npy')
-        # Sort descending (best first)
-        gecko_results_sorted = sorted(gecko_results, key=sort_key, reverse=True)
-        print("\nSorted results:")
-        sorted_indices = []
-        for rank, (i, sim, nll, label, p) in enumerate(gecko_results_sorted, 1):
-            sorted_indices.append(int(i))
-        print(sorted_indices)
-        print(np.array(train_data_authors)[sorted_indices[:1]])
+        sample_sentence = torch.load(os.path.join(base_dir, "data/samples_gutenberg", f"{sample}.pt"), map_location='cpu', weights_only=False)
+        sentence = sample_sentence['sentence']
+        prompt = sample_sentence['prompt']
+        full_sentence = prompt + sentence
+        output_ids = tokenizer.encode(full_sentence, add_special_tokens=False, return_tensors='pt')
+        if output_ids.shape[1] > model.config.n_positions:
+            output_ids = output_ids[:, :model.config.n_positions]
+            print(f"Output ids shape: {output_ids.shape}")
+            
+        prompt_length = len(tokenizer.encode(prompt, add_special_tokens=False))
+        
         print('Output ids:')
         print(tokenizer.decode(output_ids[0], skip_special_tokens=True))
+
+        ascent_losses = np.load(os.path.join(base_dir, "../data/losses/gutenberg", f"{author}", "ascent", f"losses_{author}_ascent.npy"))
+        descent_losses = np.load(os.path.join(base_dir, "../data/losses/gutenberg", f"{author}", "descent", f"losses_{author}_descent.npy"))
+        sample_scores = np.abs(ascent_losses - descent_losses)
+        sample_scores = sample_scores.argsort()[::-1]
+        sample_scores = sample_scores[:args.num_samples]
         num_samples = args.num_samples
-        sorted_indices = np.array(sorted_indices)
         train_data_np = np.array(train_data)
         train_data_new = np.delete(train_data_np, sorted_indices[:num_samples], axis=0)
         train_data_authors_new = np.delete(train_data_authors, sorted_indices[:num_samples], axis=0)
-        training_dataset = GutenbergDatasetAuthorText(train_data_new, tokenizer)
+        training_dataset = GutenbergDatasetAuthorText(train_data_np, tokenizer)
         eval_dataset = GutenbergDatasetAuthorText(eval_data, tokenizer)
-        print(len(training_dataset))
-        print(len(eval_dataset))
-        
+
         for seed in seeds:
             random.seed(seed)
             np.random.seed(seed)
@@ -181,7 +165,7 @@ if __name__ == "__main__":
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(seed)
             print(f'seed: {seed}')
-            os.makedirs(os.path.join(model_base_path, f'retrained_models/{author}/gecko_samples_{num_samples}_seed_{seed}_final'), exist_ok=True)
+            os.makedirs(os.path.join(model_base_path, f'retrained_models/{author}/attributed_samples_{num_samples}_seed_{seed}_final'), exist_ok=True)
             
             print('scratch training')
             config = GPT2Config(
@@ -205,7 +189,7 @@ if __name__ == "__main__":
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.95)
             print(model.config)
             training_args = TrainingArguments(
-                output_dir=os.path.join(model_base_path, f'retrained_models/{author}/gecko_samples_{num_samples}_seed_{seed}'),
+                output_dir=os.path.join(model_base_path, f'retrained_models/{author}/attributed_samples_{num_samples}_seed_{seed}'),
                 per_device_train_batch_size=batch_size,
                 per_device_eval_batch_size=batch_size,
                 gradient_accumulation_steps=gradient_accumulation_steps,
@@ -235,8 +219,8 @@ if __name__ == "__main__":
             # inside loop
             wandb.init(
                 project=args.project_name,
-                name=f"gecko-samples_seed-{seed}_num_samples-{num_samples}",
-                config={"mode": "gecko", "seed": seed, "num_samples": num_samples, "author": author},
+                name=f"attributed-samples_seed-{seed}_num_samples-{num_samples}",
+                config={"mode": "attributed", "seed": seed, "num_samples": num_samples, "author": author},
                 reinit=True 
             )
             wandb.watch(model, log=None)
@@ -245,8 +229,8 @@ if __name__ == "__main__":
             model.eval()
             model.to('cuda')
             model.to('cpu')
-            os.makedirs(os.path.join(model_base_path, f'retrained_models/{author}/gecko_{num_samples}_seed_{seed}_final'), exist_ok=True)
-            trainer.save_model(f'out/retrained_models/{author}/gecko_{num_samples}_seed_{seed}_final')
+            os.makedirs(os.path.join(model_base_path, f'retrained_models/{author}/attributed_samples_{num_samples}_seed_{seed}_final'), exist_ok=True)
+            trainer.save_model(f'out/retrained_models/{author}/attributed_samples_{num_samples}_seed_{seed}_final')
             trainer.save_state()
             del model
             torch.cuda.empty_cache()

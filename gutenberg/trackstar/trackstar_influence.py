@@ -54,7 +54,7 @@ def compute_influence_all_samples(
 
 def load_sample_gradients(sample_names, sample_dir, device, source):
     out = {}
-    already_processed = os.listdir(os.path.join(os.path.dirname(__file__), f"../../data/trackstar/scores/{source}"))
+    already_processed = os.listdir(os.path.join(os.path.dirname(__file__), f"../../data/trackstar/gutenberg/scores/{source}"))
     for raw_name in sample_names:
         name = raw_name[7:]
         if name + ".npy" in already_processed:
@@ -81,15 +81,15 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     base_dir = os.path.dirname(__file__)
 
-    gradient_dir = os.path.join(base_dir, "../../data/trackstar/gradients")
+    gradient_dir = os.path.join(base_dir, "../../data/trackstar/gutenberg/gradients")
     grad_files = sorted_grad_files(gradient_dir)
     print(len(grad_files))
     print(grad_files[:10])
-    sample_dir = os.path.join(base_dir, f"../../data/trackstar/sample_gradients/{args.source}")
+    sample_dir = os.path.join(base_dir, f"../../data/trackstar/gutenberg/sample_gradients/{args.source}")
     all_samples = [f[:-3] for f in os.listdir(sample_dir) if f.endswith(".pt")]
     sample_names = args.sample_names if args.sample_names is not None else all_samples
 
-    scores_dir = os.path.join(base_dir, f"../../data/trackstar/scores/{args.source}")
+    scores_dir = os.path.join(base_dir, f"../../data/trackstar/gutenberg/scores/{args.source}")
     os.makedirs(scores_dir, exist_ok=True)
     print(sample_names)
     sample_grads = load_sample_gradients(sample_names, sample_dir, device, args.source)

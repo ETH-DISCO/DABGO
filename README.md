@@ -19,6 +19,10 @@ This repository contains experiments for studying attribution in language models
 - **`wikipedia/`**: Experiments on Wikipedia factual knowledge
 - **`gutenberg/`**: Experiments on literary text from Project Gutenberg
 
+## Updates:
+
+* Cleaned up the repo. All different methods are in their own folder.
+* Fixed Natural Gradient Descent and Gecko implementations in gradient_steps.py and gecko folder in both gutenberg and wikipedia folders.
 
 ## Usage 
 
@@ -48,26 +52,15 @@ python fisher_diag.py
 Afterwards generate samples and record loss by performing both gradient ascent and descent.
 
 ```bash
-python wikipedia/wiki_experiments.py
+python wikipedia/samples_wikipedia.py --subject "Ancient Rome"
+python wikipedia/gradient_steps.py --sample_name "Ancient Rome"
+python wikipedia/loss_computation.py --mode "descent" --both --batch_size=30 --model_name "Ancient Rome" #Adjust Batch size when running into memory issues or speedup
 ```
 
-```bash
-## The model name are specified in wiki_experiments during the saving process (These are the optimized models by either gradient ascent or descent corresponding to a certain generated text sample). 
-## In wiki_experiments.py for each generated sample we save an gradient ascent and descent optimized model. (Command template for loss computation):
-python wikipedia/loss_computation.py --finetuned_model_path <model_name> --save_path <results> --mode <finetuned/unlearned>
-
-## Need to run once with --mode unlearned and finetuned for each generated sample: 
-## Example to get influential training samples for the Ancient Rome case:
-python wikipedia/loss_computation.py --finetuned_model_path "ancient_rome" --save_path "ancient_rome" --mode "finetuned"
-python wikipedia/loss_computation.py --finetuned_model_path "ancient_rome" --save_path "ancient_rome" --mode "unlearned"
-
-## To get the losses of the base model run with following arguments:
-python wikipedia/loss_computation.py --finetuned_model_path "wiki_model" --save_path "losses_bf" --mode "base"
-```
 #### Evaluation
 
 ```bash
-python wikipedia/tailpatch.py --save_path=results_aggregated
+python wikipedia/tailpatch.py --method "dabgo"
 ```
 
 
@@ -87,17 +80,19 @@ python gutenberg_training.py --model_path gpt2-scratch-mixed --data_path selecte
 Sample Generation and loss computation: 
 ```bash
 # Generate samples and compute losses for author-specific attribution
-cd gutenberg
-python samples_gutenberg.py
+python gutenberg/samples_gutenberg.py
+python gutenberg/gradient_steps.py --compute_fisher
+python gutenberg/loss_computation.py --model_name <author_to_be_attributed> --mode "ascent"
+```
+Evaluation:
+```bash
+python gutenberg/tailpatch.py --method "dabgo"
 ```
 
-
-To evaluate with the tailpatch score on our samples use the `gutenberg/tailpatch.ipynb` notebook. If you want to test on your own samples take the tailpatch function given in the first cell. 
-
-To evaluate via retraining run one of the following: `gutenberg/retraining_gutenberg_bm25/ftun/gecko/trackstar.py`. Each one of these handles how we stored attributed samples according to their method. Example for ours:
+To evaluate via retraining run one of the following: `gutenberg/retraining_gutenberg_bm25/dabgo/gecko/trackstar.py`. Each one of these handles how we stored attributed samples according to their method. Example for ours:
 ```bash
 cd gutenberg
-python retraining_gutenberg_ftun --authors "William Shakespeare" --num_samples <k>
+python retraining_gutenberg_dabgo.py --authors "William Shakespeare" --num_samples <k>
 ```
 $k$ in this case corresponds to the leave-k-out method. Which we refer to as ground-truth in the context of data attribution. We will be removing the top-$k$ influential samples identified by the corresponding method (in our case **DABGO**) for a generated samples $x$ and retraining without those training-data-samples. At end, one can evaluate influence by measuring the loss on $x$ in the newly trained model compared to the base model (This analysis is in `tailpatch.ipynb`). In our analysis we used $k=20,50,100$
   

@@ -31,7 +31,7 @@ def compute_fisher_diagonal(model, dataset, tokenizer, device='cuda', batch_size
         attention_mask = batch['attention_mask'].to(device)
         labels = batch['labels'].to(device)
         out = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-        loss = out.loss 
+        loss = out.loss
         loss.backward() 
         for name, param in params:
             if param.grad is not None: 
@@ -50,15 +50,13 @@ def compute_fisher_diagonal(model, dataset, tokenizer, device='cuda', batch_size
             os.makedirs(os.path.join(os.path.dirname(__file__), "fisher_diag"), exist_ok=True)
             torch.save(fisher_normalized, os.path.join(os.path.dirname(__file__), "fisher_diag", f"fisher_diag_intermediate_samples_{start_index}_{end_index}.pt"))
 
-    fisher_normalized = {}
-    for name in fisher_diag:
-        fisher_normalized[name] = fisher_diag[name] / num_grads
-        fisher_ckpt = {
-            "fisher_diag": fisher_normalized,
-            "start_index": start_index,
-            "end_index": end_index,
-            "num_grads": num_grads,
-        }
+    
+    fisher_ckpt = {
+        "fisher_diag": fisher_diag,
+        "start_index": start_index,
+        "end_index": end_index,
+        "num_grads": num_grads,
+    }
     os.makedirs(os.path.join(os.path.dirname(__file__), "fisher_diag"), exist_ok=True)
     torch.save(fisher_ckpt, os.path.join(os.path.dirname(__file__), "fisher_diag", f"fisher_diag_samples_{start_index}_{end_index}_end.pt"))
     print(f"Final Fisher diagonal computed with {num_grads} total samples")
@@ -68,15 +66,15 @@ def compute_fisher_diagonal(model, dataset, tokenizer, device='cuda', batch_size
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--start_index", type=int, default=0)
-    parser.add_argument("--end_index", type=int, default=2000000)
+    parser.add_argument("--end_index", type=int, default=1000000)
     parser.add_argument("--batch_size", type=int, default=1)
     args = parser.parse_args()
     print("Starting Fisher diagonal computation")
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     tokenizer.pad_token = tokenizer.eos_token
-    base_dir = os.path.join(os.path.dirname(__file__), "../")
+    base_dir = os.path.join(os.path.dirname(__file__), "../../../../../")
     print(base_dir)
-    model = GPT2LMHeadModel.from_pretrained(os.path.join(base_dir, "out/wiki_model"))
+    model = GPT2LMHeadModel.from_pretrained(os.path.join(base_dir, "out/gpt2-scratch-mixed"))
 
     model.eval()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'

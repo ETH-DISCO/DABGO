@@ -1,10 +1,10 @@
 ### Compute the loss of each training sample given a model and a dataset
-### Used for Wikipedia Model
 import torch
 import numpy as np
 import argparse
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
+import json
 from tqdm import tqdm
 import os
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, DataCollatorForLanguageModeling, GPT2Config
@@ -13,7 +13,7 @@ from torch.cuda.amp import autocast
 from datasets import load_from_disk
 import gc
 from transformers import DataCollatorWithPadding
-
+from datasets import Dataset
 
 
 SEED = 42
@@ -72,14 +72,14 @@ def collect_per_sample_losses(model, dataset, tokenizer,device='cuda',  batch_si
             all_sample_losses.extend(sample_losses.cpu().tolist())
             processed_samples += len(sample_losses)
             del input_ids, attention_mask, outputs, logits, per_token_loss, sample_losses, log_probs
-            
+                
     return np.array(all_sample_losses, dtype=np.float32)
 
 
-def main(args, mode):
+def main(args):
     model_name = args.model_name
     save_name = model_name
-    
+    mode = args.mode
     batch_size = args.batch_size
     num_workers = args.num_workers
     source = args.source
@@ -87,11 +87,10 @@ def main(args, mode):
     tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
     tokenizer.pad_token = tokenizer.eos_token
     base_dir = os.path.join(os.path.dirname(__file__), "../")
-    ckpt = torch.load(os.path.join(base_dir, "out", args.save_dir, f'{args.model_name}/{mode}/{args.steps}/{args.model_name}_{mode}_{args.steps}.pt'), weights_only=False)
-    model = GPT2LMHeadModel.from_pretrained(os.path.join(base_dir, "out/wiki_model"))
+    ckpt = torch.load(os.path.join(base_dir, "out", "optimized_models", f"{args.model_name}.pt"), weights_only=False)
+    model = GPT2LMHeadModel.from_pretrained(os.path.join(base_dir, "out/gpt2-scratch-mixed"))
     
-    
-    print(f"Loading {mode} model...")
+    mode = "descent" if args.mode == "descent" else "ascent"
     model.load_state_dict(ckpt[f'{mode}_model'])
     print(f"Model: {model_name}")
     print(f"Mode: {mode}")
@@ -103,13 +102,17 @@ def main(args, mode):
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print('model loaded')
-
+    samples = os.listdir(os.path.join(os.path.dirname(__file__), "../data/samples_gutenberg"))
+    samples = [name.replace('.pt', '') for name in samples]
+    print(len(samples))
+    print(samples)
     
-    train_dataset = load_from_disk(os.path.join(base_dir, "data/training_data/tokenized_wit_dataset/train"))
-    print(len(train_dataset))
+    with open(os.path.join(base_dir, "gutenberg/selected_dataset_mixed.json"), "r") as f:
+        data = json.load(f)
+    train_data = data['train_data_np']
+    train_data = torch.tensor(train_data)
     
-    columns_to_keep = ["input_ids"]
-    train_dataset = train_dataset.remove_columns([c for c in train_dataset.column_names if c not in columns_to_keep])
+    train_dataset = Dataset.from_dict({"input_ids": train_data})
     print("Dataset loaded")
     print("Collecting losses...")
     losses_af = collect_per_sample_losses(model, train_dataset, 
@@ -119,25 +122,33 @@ def main(args, mode):
                                           num_workers=num_workers)
     print("Losses collected with mean loss: ", losses_af.mean().item())
     print("Saving losses...")
-    os.makedirs(os.path.join(base_dir, f'data/losses/{source}/{save_name}/{mode}/{args.steps}'), exist_ok=True)
-    np.save(os.path.join(base_dir, f'data/losses/{source}/{save_name}/{mode}/{args.steps}/losses_{save_name}_{mode}_{args.steps}.npy'), losses_af)
+    os.makedirs(os.path.join(os.path.dirname(__file__), f'../data/losses/{source}/{save_name}/{mode}'), exist_ok=True)
+    np.save(os.path.join(os.path.dirname(__file__), f'../data/losses/{source}/{save_name}/{mode}/losses_{save_name}_{mode}.npy'), losses_af)
 
 
-    
+
+    print("Losses saved")
+
+    mode = "ascent" if mode == "descent" else "descent"
+    model.load_state_dict(ckpt[f'{mode}_model'])
+    losses_af = collect_per_sample_losses(model, train_dataset, 
+                                          tokenizer,
+                                          device=device,
+                                          batch_size=batch_size,
+                                          num_workers=num_workers)
+    print("Losses collected with mean loss: ", losses_af.mean().item())
+    print("Saving losses...")
+    os.makedirs(os.path.join(os.path.dirname(__file__), f'../data/losses/{source}/{save_name}/{mode}'), exist_ok=True)
+    np.save(os.path.join(os.path.dirname(__file__), f'../data/losses/{source}/{save_name}/{mode}/losses_{save_name}_{mode}.npy'), losses_af)
+
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name', type=str, default='wiki_model')
+    parser.add_argument('--model_name', type=str, default='gpt2-scratch-mixed')
     parser.add_argument('--mode', type=str, required=True)
     parser.add_argument('--batch_size', type=int, default=30)
     parser.add_argument('--num_workers', type=int, default=1)
-    parser.add_argument('--source', type=str, default='wikipedia')
-    parser.add_argument('--steps', type=int, default=10)
-    parser.add_argument('--save_dir', type=str, default='optimized_models')
-    parser.add_argument('--both', action='store_true')
+    parser.add_argument('--source', type=str, default='gutenberg')
     args = parser.parse_args()
-    main(args, args.mode)
-    if args.both:
-        mode = "descent" if args.mode == "ascent" else "ascent"
-        main(args, mode)
+    main(args)
